@@ -1,0 +1,46 @@
+with avg_amounts as --Os dados de Income e Wealth vieram em nvarchar. Transformei em money para possibilitar agregações. Exclui o $ e o .
+(
+	select 
+		cnae,
+		(cast(replace(average_ticket1, '$', '') as money)/100) as cnae_avg_ticket,
+		(cast(replace(average_income1, '$', '') as money)/100) as cnae_avg_income,  
+		(cast(replace(average_wealth1, '$', '') as money)/100) transformed_avg_wealth
+	from 
+		(
+			select *, replace(average_ticket, '.', '') as average_ticket1, replace(average_income, '.', '') as average_income1, replace(average_wealth, '.', '') as average_wealth1 
+			from cnae_statistcs
+		) as tab
+) ,
+
+true_amount as
+(
+	select		merchant_id, cast(avg(merchant_total_amount) as decimal (18,2)) as merchant_true_amount
+	from 
+ 		(
+			select
+				merchant_id, cast(sum(amount) as decimal (18,2)) as merchant_total_amount
+			from 
+				dbo.AMLCaseData_transactions
+			where 
+				status = 'approved'
+			group by 
+				merchant_id, year(transaction_date),month(transaction_date)
+		) as tab
+	
+	group by merchant_id
+) 
+
+select 
+	A.merchant_id, datediff(month, afiiliation_date, '2021-03-31') as affiliation_months, merchant_true_amount, cnae_avg_income, cast((merchant_true_amount / cnae_avg_income) as decimal (18,2)) as income_sum_diff
+
+from 
+	dbo.merchants_data A
+join
+	true_amount B on A.merchant_id = B.merchant_id
+join
+	avg_amounts C on A.cnae = C.cnae
+
+where 
+	datediff(month, afiiliation_date, '2021-03-31') < 3
+  and 
+	 cast((merchant_true_amount / cnae_avg_income) as decimal (18,2)) > 2.5
