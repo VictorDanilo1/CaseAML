@@ -1,0 +1,78 @@
+with avg_amounts as --Os dados de Income e Wealth vieram em nvarchar. Transformei em money para possibilitar agregações. Exclui o $ e o .
+(
+	select 
+		cnae,
+		(cast(replace(average_ticket1, '$', '') as money)/100) as cnae_avg_ticket,
+		(cast(replace(average_income1, '$', '') as money)/100) as cnae_avg_income,  
+		(cast(replace(average_wealth1, '$', '') as money)/100) transformed_avg_wealth
+	from 
+		(
+			select *, replace(average_ticket, '.', '') as average_ticket1, replace(average_income, '.', '') as average_income1, replace(average_wealth, '.', '') as average_wealth1 
+			from cnae_statistcs
+		) as tab
+) ,
+
+true_amount as
+(
+	select
+		merchant_id, avg(merchant_total_amount) as merchant_true_amount
+	from 
+ 		(
+			select
+				merchant_id, cast(sum(amount) as decimal (18,2)) as merchant_total_amount
+			from 
+				dbo.AMLCaseData_transactions
+			where 
+				status = 'approved'
+			group by 
+				merchant_id, year(transaction_date),month(transaction_date)
+		) as tab
+	
+	group by merchant_id
+) , 
+
+true_avg_ticket as
+
+(
+	select
+		merchant_id, cast(avg(amount) as decimal (18,2)) as true_average_ticket
+	from 
+		dbo.AMLCaseData_transactions
+	where 
+		status = 'approved'
+	group by merchant_id 
+
+) ,
+final_query as
+
+(
+	select
+		CR.merchant_id, CR.cnae, CR.cra_classification, cnae_avg_ticket, true_average_ticket, (true_average_ticket / cnae_avg_ticket) as avg_ticket_diff, 
+		cnae_avg_income, merchant_true_amount, cast((merchant_true_amount / cnae_avg_income) as decimal (18,2)) as income_sum_diff,
+		CR.transformed_income,  cast((merchant_true_amount / CR.transformed_income) as decimal (18,2)) as declared_income_sum_diff
+
+	from 
+		dbo.customer_risk CR
+	join
+		avg_amounts AA on CR.cnae = AA.cnae
+	join
+		true_amount TA on CR.merchant_id = TA.merchant_id
+	join 
+		true_avg_ticket TT on CR.merchant_id = TT.merchant_id
+	group by CR.merchant_id, CR.cnae, cnae_avg_ticket, true_average_ticket, cnae_avg_income, merchant_true_amount, CR.transformed_income, CR.cra_classification
+) 
+
+select 
+	merchant_id, cnae,cra_classification, cnae_avg_ticket, avg_ticket_diff,  true_average_ticket
+
+from 
+	final_query
+
+where 
+	(cra_classification = 'High Risk' and (avg_ticket_diff > 1.5) or 
+	 cra_classification = 'Medium Risk' and (avg_ticket_diff > 3.0) or
+	 cra_classification = 'Low Risk' and (avg_ticket_diff > 5.0) )
+
+order by 
+	avg_ticket_diff desc
+
