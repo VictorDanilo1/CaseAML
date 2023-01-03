@@ -1,0 +1,46 @@
+with true_amount as
+(
+	select
+		merchant_id, avg(merchant_total_amount) as merchant_true_amount
+	from 
+ 		(
+			select
+				merchant_id, cast(sum(amount) as decimal (18,2)) as merchant_total_amount
+			from 
+				dbo.AMLCaseData_transactions
+			where 
+				status = 'approved'
+			group by 
+				merchant_id, year(transaction_date),month(transaction_date)
+		) as tab
+	
+	group by merchant_id
+), 
+
+final_query as 
+(
+select 
+	A.merchant_id, year(transaction_date) year_transaction_date, month(transaction_date) month_transaction_date, cra_classification, card_number, 
+	count(distinct card_holder_name) as count_distinct_customers_same_card, sum(amount) as amount_distinct_customers, merchant_true_amount, (sum(amount) / merchant_true_amount) as diff_income
+from 
+	amlcasedata_transactions A
+join
+	customer_risk B on A.merchant_id = B.merchant_id
+join
+	true_amount C on A.merchant_id = C.merchant_id
+where status = 'approved'
+group by 
+	A.merchant_id, card_number,  year(transaction_date), month(transaction_date), merchant_true_amount, cra_classification
+having 
+	count(distinct card_holder_name) > 1
+)
+
+select * 
+from 
+  final_query
+where 
+    ((cra_classification = 'High Risk' and diff_income > 0.7 and amount_distinct_cards > 15000) or 
+	  (cra_classification = 'Medium Risk' and diff_income > 0.85 and amount_distinct_cards > 30000) or
+	  (cra_classification = 'Low Risk' and diff_income > 1) and amount_distinct_cards > 50000)
+order by 
+	count_distinct_customers_same_card desc, diff_income desc, amount_distinct_customers desc
