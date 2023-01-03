@@ -1,0 +1,79 @@
+create view customer_risk as --criando view para trabalhar com a tabela gerada em outras consultas
+
+with transform as --Os dados de Income e Wealth vieram em nvarchar. Transformei em money para possibilitar agregações. Exclui o $ e o .
+(
+	select 
+		merchant_id, cast(afiiliation_date as date) as transformed_afiiliation_date, cnae, (cast(replace(income1, '$', '') as money)/100) as transformed_income,  (cast(replace(wealth1, '$', '') as money)/100) transformed_wealth
+	from 
+		(
+			select *, replace(income, '.', '') income1, replace(wealth, '.', '') wealth1  
+			from merchants_data
+		) as tab
+) ,
+
+risk_aggregation as --join entre as tabelas de merchant_data e risco por cnae.
+(
+	select 
+		TRF.merchant_id, TRF.transformed_afiiliation_date, TRF.cnae, TRF.transformed_income, TRF.transformed_wealth,  
+		case 
+			when CNR.risco_alto is null then 'Baixo Risco' 
+			else 'Alto Risco' 
+			end as risco_cnae, 
+		case 
+			when CNR.associação is null then 'Sem Associação' 
+			else CNR.associação 
+			end as associacao_risco_cnae 
+	from 
+		transform TRF
+	join 
+		cnaes_risco CNR on TRF.cnae = CNR.cnae
+
+	group by 
+		TRF.merchant_id, TRF.transformed_afiiliation_date, TRF.cnae, TRF.transformed_income, TRF.transformed_wealth,  CNR.risco_alto, CNR.associação
+) ,
+
+risk_classification as --apurar a pontuação de risco por cenário.
+(
+	select *,
+		case
+			when risco_cnae = 'RISCO ALTO' then 40 else 10 
+			end as risk_score_cnae,
+		case
+			when datediff(month, transformed_afiiliation_date, '2021-03-31') <= 3 then 40
+			when datediff(month, transformed_afiiliation_date, '2021-03-31') between 4 and 6 then 30
+			when datediff(month, transformed_afiiliation_date, '2021-03-31') between 7 and 12 then 20
+			when datediff(month, transformed_afiiliation_date, '2021-03-31') > 12 then 40
+			end as risk_score_afiiliation_date,
+		case 
+			when transformed_income < 500 then 40
+			when transformed_income between 500 and 100000 then 10
+			when transformed_income between 100001 and 500000 then 20
+			when transformed_income between 500001 and 1000000 then 30
+			when transformed_income > 1000000 then 40 
+			end as risk_score_income, 
+		case 
+			when transformed_wealth < 1000 then 40
+			when transformed_wealth between 1001 and 500000 then 10
+			when transformed_wealth between 500001 and 1000000 then 20
+			when transformed_wealth between 1000001 and 5000000 then 30
+			when transformed_wealth > 5000000 then 40 
+			end as risk_score_wealth 
+	from
+		risk_aggregation
+), 
+
+final_risk_score as --lista o score e a classificação final do risco, conforme parâmetros acima
+(
+	select 
+		merchant_id, transformed_afiiliation_date, cnae, transformed_income, transformed_wealth, 
+		(risk_score_cnae + risk_score_afiiliation_date + risk_score_income + risk_score_wealth) as final_risk_score,
+		case 
+			when (risk_score_cnae + risk_score_afiiliation_date + risk_score_income + risk_score_wealth) < 71 then 'Low Risk'
+			when (risk_score_cnae + risk_score_afiiliation_date + risk_score_income + risk_score_wealth) between 71 and 110 then 'Medium Risk'
+			when (risk_score_cnae + risk_score_afiiliation_date + risk_score_income + risk_score_wealth) > 110 then 'High Risk'
+			end as cra_classification	
+		from 
+		risk_classification
+)
+
+select * from final_risk_score
