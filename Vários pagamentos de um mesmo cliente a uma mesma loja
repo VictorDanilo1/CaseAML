@@ -1,0 +1,51 @@
+with total_amount as
+(
+	select
+		merchant_id, year(transaction_date) year_transaction_date,month(transaction_date) month_transaction_date, sum(amount) as merchant_total_amount
+	from 
+		dbo.AMLCaseData_transactions
+	where 
+		status = 'approved'
+	group by merchant_id, year(transaction_date), month(transaction_date)
+) ,
+
+amount_by_customer as
+
+(
+	select 
+		TR.merchant_id, year_transaction_date, month_transaction_date, merchant_total_amount, card_holder_name, count(card_holder_name) same_customer_transactions, sum(TR.amount) amount_by_customer
+	from 
+		total_amount TA
+	join 
+		dbo.AMLCaseData_transactions TR on TA.merchant_id = TR.merchant_id and year_transaction_date = year(transaction_date) and month_transaction_date = month(transaction_date)
+	where 
+		TR.status = 'approved' 
+	group by 
+		TR.merchant_id, year_transaction_date, month_transaction_date, merchant_total_amount, card_holder_name
+) ,
+
+multiple_payments as
+(
+	select 
+		AC.merchant_id,  year_transaction_date, month_transaction_date, merchant_total_amount, card_holder_name, same_customer_transactions,  amount_by_customer, (amount_by_customer / merchant_total_amount) as customer_amount_percentual, CR.cra_classification,
+		case
+			when (amount_by_customer / merchant_total_amount) > 0.6 and same_customer_transactions > 5 and CR.cra_classification = 'High Risk' and amount_by_customer > 15000 then 'alert'
+			when (amount_by_customer / merchant_total_amount) > 0.75 and same_customer_transactions > 10 and CR.cra_classification = 'Medium Risk' and amount_by_customer > 30000  then 'alert'
+			when (amount_by_customer / merchant_total_amount) > 0.85 and same_customer_transactions > 15 and CR.cra_classification = 'Low Risk' and amount_by_customer > 50000  then 'alert'
+			else 'normal transaction'
+			end as possible_alert
+	from 
+		amount_by_customer AC
+	join
+		dbo.customer_risk CR on AC.merchant_id = CR.merchant_id
+
+)
+
+select MP.merchant_id, card_holder_name,CN.cnae, CN.cód_setor, CN.descrição, CN.risco_alto, possible_alert, sum(amount_by_customer) amount_by_customer
+from multiple_payments MP
+join merchants_data MD on MP.merchant_id = MD.merchant_id
+join cnaes_risco CN on MD.cnae = CN.cnae
+
+where possible_alert = 'alert'
+group by MP.merchant_id, card_holder_name, possible_alert, CN.cnae, CN.cód_setor, CN.descrição, CN.risco_alto
+order by amount_by_customer desc
