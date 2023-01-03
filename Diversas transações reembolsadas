@@ -1,0 +1,55 @@
+with refunded_transactions as 
+(
+select 
+	merchant_id, month(transaction_date) month_transaction_date, count(distinct card_holder_name) as count_distinct_customers,sum(amount) as refunded_amount
+from 
+	amlcasedata_transactions
+where 
+	status = 'refunded'
+group by  
+	merchant_id, month(transaction_date)
+), 
+
+approved_transactions as
+(
+select 
+	merchant_id, month(transaction_date) month_transaction_date, count(card_holder_name) as count_customers, sum(amount) as approved_amount
+from 
+	amlcasedata_transactions
+where 
+	status = 'approved'
+group by  
+	merchant_id, month(transaction_date)
+) , 
+
+final_query as 
+(
+	select
+		A.merchant_id, A.month_transaction_date, cra_classification, descrição,
+		sum(A.count_distinct_customers) as count_customers,
+		cast(sum(refunded_amount) as decimal (18,2))  refunded_amount, 
+		cast(sum(approved_amount) as decimal (18,2))  approved_amount, 
+		(sum(refunded_amount) / sum(approved_amount)) as diff_refunded_approved_by_merchant
+	from
+		refunded_transactions A
+	join 
+		approved_transactions B on A.merchant_id = B.merchant_id
+	join
+		customer_risk C on A.merchant_id = C.merchant_id
+	left join
+		cnaes_risco D on C.cnae = D.CNAE
+	group by  
+		A.merchant_id, A.month_transaction_date, cra_classification, descrição
+) 
+
+select 
+	merchant_id, month_transaction_date, cra_classification, descrição, refunded_amount, approved_amount, count_customers, diff_refunded_approved_by_merchant
+from
+	final_query
+
+where (cra_classification = 'High Risk' and diff_refunded_approved_by_merchant > 1 and refunded_amount > 15000) or 
+	   (cra_classification = 'Medium Risk' and diff_refunded_approved_by_merchant > 2 and refunded_amount > 30000) or
+	   (cra_classification = 'Low Risk' and diff_refunded_approved_by_merchant > 3 and refunded_amount > 50000)
+group by  
+	merchant_id, month_transaction_date, cra_classification, descrição, refunded_amount, approved_amount, count_customers, diff_refunded_approved_by_merchant
+order by diff_refunded_approved_by_merchant desc
